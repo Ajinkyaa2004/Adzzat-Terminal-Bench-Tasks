@@ -25,6 +25,8 @@ import { normalizeCommitterObject } from '../utils/normalizeCommitterObject.js'
  * @param {string} [args.committer.email]
  * @param {number} [args.committer.timestamp]
  * @param {number} [args.committer.timezoneOffset]
+ * @param {Array<{action: string, oid: string, message?: string}>} [args.todo] - Instruction list, like `git rebase -i`; default: pick every commit in order
+ * @param {boolean} [args.autosquash=false] - Move `fixup!`/`squash!` commits behind the commits they name
  * @param {boolean} [args.continue=false] - Continue a rebase stopped by a conflict
  * @param {boolean} [args.abort=false] - Abort a rebase stopped by a conflict
  * @param {object} [args.cache] - a [cache](cache.md) object
@@ -39,6 +41,8 @@ export async function rebase({
   branch,
   onto,
   committer: _committer,
+  todo,
+  autosquash = false,
   continue: cont = false,
   abort = false,
   cache = {},
@@ -57,7 +61,7 @@ export async function rebase({
       return await _rebaseContinue({ fs, cache, dir, gitdir: updatedGitdir, committer })
     }
     if (!upstream) throw new MissingParameterError('upstream')
-    return await _rebase({ fs, cache, dir, gitdir: updatedGitdir, upstream, branch, onto, committer })
+    return await _rebase({ fs, cache, dir, gitdir: updatedGitdir, upstream, branch, onto, committer, todo, autosquash })
   } catch (err) {
     err.caller = 'git.rebase'
     throw err
