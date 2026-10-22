@@ -50,6 +50,7 @@ export async function mergeTree({
   dryRun = false,
   abortOnConflict = true,
   mergeDriver,
+  pathNames = {},
 }) {
   const ourTree = TREE({ ref: ourOid })
   const baseTree = TREE({ ref: baseOid })
@@ -151,9 +152,9 @@ export async function mergeTree({
               ours,
               base,
               theirs,
-              ourName,
+              ourName: pathNames[filepath] ? pathNames[filepath].ourName : ourName,
               baseName,
-              theirName,
+              theirName: pathNames[filepath] ? pathNames[filepath].theirName : theirName,
               mergeDriver,
             }).then(async r => {
               if (!r.cleanMerge) {

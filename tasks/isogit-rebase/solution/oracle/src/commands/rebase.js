@@ -21,6 +21,7 @@ import { GitIndexManager } from '../managers/GitIndexManager.js'
 import { GitRefManager } from '../managers/GitRefManager.js'
 import { join } from '../utils/join.js'
 import { mergeTree } from '../utils/mergeTree.js'
+import { alignRenames } from '../utils/renames.js'
 
 const STATE_DIR = 'rebase-merge'
 const STATE_FILE = 'isogit-rebase.json'
@@ -187,6 +188,16 @@ async function mergeOntoHead({ fs, cache, dir, gitdir, commit, committer }) {
   const parentTree = await treeOf({ fs, cache, gitdir, oid: commit.commit.parent[0] })
   if (commit.commit.tree === parentTree) return { tree: currentTree, current, currentTree, emptyOriginal: true }
   const label = `${commit.oid.slice(0, 7)} (${subjectOf(commit.commit.message)})`
+  const aligned = await alignRenames({
+    fs,
+    cache,
+    gitdir,
+    baseOid: parentTree,
+    ourOid: currentTree,
+    theirOid: commit.commit.tree,
+    ourName: 'HEAD',
+    theirName: label,
+  })
   const merged = await GitIndexManager.acquire({ fs, gitdir, cache, allowUnmerged: false }, async index =>
     mergeTree({
       fs,
@@ -194,12 +205,13 @@ async function mergeOntoHead({ fs, cache, dir, gitdir, commit, committer }) {
       dir,
       gitdir,
       index,
-      ourOid: currentTree,
-      baseOid: parentTree,
-      theirOid: commit.commit.tree,
+      ourOid: aligned.ourOid,
+      baseOid: aligned.baseOid,
+      theirOid: aligned.theirOid,
       ourName: 'HEAD',
       baseName: 'base',
       theirName: label,
+      pathNames: aligned.pathNames,
       abortOnConflict: true,
     })
   )
