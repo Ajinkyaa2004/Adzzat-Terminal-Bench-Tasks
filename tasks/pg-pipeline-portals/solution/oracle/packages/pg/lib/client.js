@@ -10,7 +10,7 @@ const Query = require('./query')
 const defaults = require('./defaults')
 const Connection = require('./connection')
 const crypto = require('./crypto/utils')
-const { PipelinedConnection, PipelineAbortedError, Unit } = require('./pipeline')
+const { PipelinedConnection, PipelineAbortedError, Unit, isMultiStatement } = require('./pipeline')
 
 const activeQueryDeprecationNotice = nodeUtils.deprecate(
   () => {},
@@ -736,6 +736,11 @@ class Client extends EventEmitter {
       return
     }
     while (this._queryQueue.length > 0) {
+      // a multi-statement simple query is a sync point: it and everything behind it wait
+      // until no portal is open
+      if (this._openPortals.size > 0 && isMultiStatement(this._queryQueue[0])) {
+        break
+      }
       const query = this._queryQueue.shift()
       this.hasExecuted = true
       const connection = new PipelinedConnection(this, query)
@@ -789,6 +794,9 @@ class Client extends EventEmitter {
 
   _portalClosed(query) {
     this._openPortals.delete(query)
+    if (this._openPortals.size === 0 && this._queryQueue.length > 0) {
+      process.nextTick(() => this._pulsePipelinedQueryQueue())
+    }
   }
 
   _pipelineDispatch(name, msg) {
