@@ -893,6 +893,10 @@ class Client extends EventEmitter {
     while (this._units.length > 0) {
       const lost = this._units[0]
       lost.failed = true
+      // a Parse the server discarded never created the statement, so it must be sent again
+      if (lost.query && lost.query.name) {
+        delete this.connection.submittedNamedStatements[lost.query.name]
+      }
       if (lost.query && !failed.has(lost.query)) {
         failed.add(lost.query)
         lost.query.handleError(aborted, lost.query._pipelinedConnection)
