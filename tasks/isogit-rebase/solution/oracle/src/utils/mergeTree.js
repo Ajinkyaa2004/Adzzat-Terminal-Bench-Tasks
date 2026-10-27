@@ -31,6 +31,8 @@ import { modified } from './modified.js'
  * @param {boolean} [args.dryRun=false]
  * @param {boolean} [args.abortOnConflict=false]
  * @param {MergeDriverCallback} [args.mergeDriver]
+ * @param {object} [args.pathNames] - per-path conflict labels for renamed paths
+ * @param {string} [args.conflictStyle='merge'] - 'merge', 'diff3' or 'zdiff3'
  *
  * @returns {Promise<string>} - The SHA-1 object id of the merged tree
  *
@@ -51,6 +53,7 @@ export async function mergeTree({
   abortOnConflict = true,
   mergeDriver,
   pathNames = {},
+  conflictStyle = 'merge',
 }) {
   const ourTree = TREE({ ref: ourOid })
   const baseTree = TREE({ ref: baseOid })
@@ -153,9 +156,10 @@ export async function mergeTree({
               base,
               theirs,
               ourName: pathNames[filepath] ? pathNames[filepath].ourName : ourName,
-              baseName,
+              baseName: pathNames[filepath] ? pathNames[filepath].baseName : baseName,
               theirName: pathNames[filepath] ? pathNames[filepath].theirName : theirName,
               mergeDriver,
+              conflictStyle,
             }).then(async r => {
               if (!r.cleanMerge) {
                 unmergedFiles.push(filepath)
@@ -380,6 +384,7 @@ async function mergeBlobs({
   baseName,
   dryRun,
   mergeDriver = mergeFile,
+  conflictStyle,
 }) {
   const type = 'blob'
   // Compute the new mode.
@@ -421,6 +426,7 @@ async function mergeBlobs({
     branches: [baseName, ourName, theirName],
     contents: [baseContent, ourContent, theirContent],
     path,
+    style: conflictStyle,
   })
   const oid = await writeObject({
     fs,

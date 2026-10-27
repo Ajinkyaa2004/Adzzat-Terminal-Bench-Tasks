@@ -18,6 +18,7 @@ import { MergeConflictError } from '../errors/MergeConflictError.js'
 import { MissingParameterError } from '../errors/MissingParameterError.js'
 import { NotFoundError } from '../errors/NotFoundError.js'
 import { UnmergedPathsError } from '../errors/UnmergedPathsError.js'
+import { GitConfigManager } from '../managers/GitConfigManager.js'
 import { GitIndexManager } from '../managers/GitIndexManager.js'
 import { GitRefManager } from '../managers/GitRefManager.js'
 import { join } from '../utils/join.js'
@@ -189,6 +190,7 @@ async function mergeOntoHead({ fs, cache, dir, gitdir, commit, committer }) {
   const parentTree = await treeOf({ fs, cache, gitdir, oid: commit.commit.parent[0] })
   if (commit.commit.tree === parentTree) return { tree: currentTree, current, currentTree, emptyOriginal: true }
   const label = `${commit.oid.slice(0, 7)} (${subjectOf(commit.commit.message)})`
+  const conflictStyle = await conflictStyleOf({ fs, gitdir })
   const aligned = await alignRenames({
     fs,
     cache,
@@ -197,6 +199,7 @@ async function mergeOntoHead({ fs, cache, dir, gitdir, commit, committer }) {
     ourOid: currentTree,
     theirOid: commit.commit.tree,
     ourName: 'HEAD',
+    baseName: `parent of ${label}`,
     theirName: label,
   })
   const merged = await GitIndexManager.acquire({ fs, gitdir, cache, allowUnmerged: false }, async index =>
@@ -210,17 +213,40 @@ async function mergeOntoHead({ fs, cache, dir, gitdir, commit, committer }) {
       baseOid: aligned.baseOid,
       theirOid: aligned.theirOid,
       ourName: 'HEAD',
-      baseName: 'base',
+      baseName: `parent of ${label}`,
       theirName: label,
       pathNames: aligned.pathNames,
+      conflictStyle,
       abortOnConflict: true,
     })
   )
+  if (aligned.locationConflicts.length) {
+    // files added inside a directory the other side renamed: git moves them and stops
+    const error = merged instanceof MergeConflictError ? merged : new MergeConflictError([], [], [], [])
+    if (!(merged instanceof MergeConflictError)) {
+      error.data.treeOid = merged
+      error.data.conflictEntries = []
+    }
+    for (const c of aligned.locationConflicts) {
+      error.data.filepaths.push(c.filepath)
+      error.data.conflictEntries.push({ filepath: c.filepath, baseOid: '', ourOid: c.stage === 2 ? c.oid : '', theirOid: c.stage === 3 ? c.oid : '', mode: c.mode })
+    }
+    error.message = `Automatic merge failed with one or more merge conflicts in the following files: ${error.data.filepaths.toString()}. Fix conflicts then commit the result.`
+    await stopWithConflict({ fs, cache, dir, gitdir, error, current, committer })
+    throw error
+  }
   if (merged instanceof MergeConflictError) {
     await stopWithConflict({ fs, cache, dir, gitdir, error: merged, current, committer })
     throw merged
   }
   return { tree: merged, current, currentTree, emptyOriginal: false }
+}
+
+// The repository's merge.conflictStyle: 'merge' (default), 'diff3' or 'zdiff3'.
+async function conflictStyleOf({ fs, gitdir }) {
+  const config = await GitConfigManager.get({ fs, gitdir })
+  const style = await config.get('merge.conflictStyle')
+  return style === 'diff3' || style === 'zdiff3' ? style : 'merge'
 }
 
 async function stopWithConflict({ fs, cache, dir, gitdir, error, current, committer }) {
@@ -471,11 +497,26 @@ export async function _rebaseContinue({ fs, cache, dir, gitdir, committer }) {
 export async function _rebaseAbort({ fs, cache, dir, gitdir }) {
   const state = await readState({ fs, gitdir })
   if (!state) throw new NotFoundError('rebase in progress')
-  await GitIndexManager.acquire({ fs, gitdir, cache, allowUnmerged: true }, async index => {
-    for (const filepath of index.unmergedPaths) index.delete({ filepath })
+  const unmerged = await GitIndexManager.acquire({ fs, gitdir, cache, allowUnmerged: true }, async index => {
+    const paths = [...index.unmergedPaths]
+    for (const filepath of paths) index.delete({ filepath })
+    return paths
   })
   await GitRefManager.writeRef({ fs, gitdir, ref: state.branchRef, value: state.origHead })
   await _checkout({ fs, cache, dir, gitdir, ref: state.branchRef, force: true, track: false })
+  // like `git reset --hard`, unmerged paths the branch does not track leave the working tree
+  const tracked = await GitIndexManager.acquire({ fs, gitdir, cache }, async index => new Set(index.entries.map(e => e.path)))
+  for (const filepath of unmerged) {
+    if (tracked.has(filepath)) continue
+    await fs.rm(join(dir, filepath))
+    for (let d = filepath.slice(0, filepath.lastIndexOf('/')); d; d = d.slice(0, Math.max(0, d.lastIndexOf('/')))) {
+      try {
+        await fs.rmdir(join(dir, d))
+      } catch (err) {
+        break
+      }
+    }
+  }
   await clearState({ fs, gitdir })
   await removeRebaseHead({ fs, gitdir })
 }
